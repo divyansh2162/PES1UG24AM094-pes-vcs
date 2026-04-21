@@ -116,22 +116,92 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 
 // ─── TODO: Implement these ──────────────────────────────────────────────────
 
-// Build a tree hierarchy from the current index and write all tree
-// objects to the object store.
-//
-// HINTS - Useful functions and concepts for this phase:
-//   - index_load      : load the staged files into memory
-//   - strchr          : find the first '/' in a path to separate directories from files
-//   - strncmp         : compare prefixes to group files belonging to the same subdirectory
-//   - Recursion       : you will likely want to create a recursive helper function 
-//                       (e.g., `write_tree_level(entries, count, depth)`) to handle nested dirs.
-//   - tree_serialize  : convert your populated Tree struct into a binary buffer
-//   - object_write    : save that binary buffer to the store as OBJ_TREE
-//
-// Returns 0 on success, -1 on error.
+#include "index.h"
+
+// Forward declaration of recursive helper
+static int write_tree_level(IndexEntry *entries, int count,
+                             const char *prefix, ObjectID *id_out);
+
+// Forward declaration of object_write
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
+
+static int write_tree_level(IndexEntry *entries, int count,
+                             const char *prefix, ObjectID *id_out) {
+    Tree tree;
+    tree.count = 0;
+    size_t pfx_len = strlen(prefix);
+    int i = 0;
+
+    while (i < count) {
+        const char *path = entries[i].path;
+        const char *rel = path;
+
+        // Strip prefix
+        if (pfx_len > 0) {
+            if (strncmp(path, prefix, pfx_len) != 0 || path[pfx_len] != '/') { i++; continue; }
+            rel = path + pfx_len + 1;
+        }
+
+        const char *slash = strchr(rel, '/');
+
+        if (!slash) {
+            // Direct file at this level — blob entry
+            TreeEntry *e = &tree.entries[tree.count++];
+            e->mode = entries[i].mode;
+            e->hash = entries[i].hash;
+            strncpy(e->name, rel, sizeof(e->name) - 1);
+            e->name[sizeof(e->name) - 1] = '\0';
+            i++;
+        } else {
+            // Subdirectory entry
+            size_t dir_len = slash - rel;
+            char dir_name[256];
+            if (dir_len >= sizeof(dir_name)) { i++; continue; }
+            memcpy(dir_name, rel, dir_len);
+            dir_name[dir_len] = '\0';
+
+            // Build sub-prefix
+            char sub_prefix[512];
+            if (pfx_len > 0)
+                snprintf(sub_prefix, sizeof(sub_prefix), "%s/%s", prefix, dir_name);
+            else
+                snprintf(sub_prefix, sizeof(sub_prefix), "%s", dir_name);
+
+            // Recursively build subtree
+            ObjectID sub_id;
+            if (write_tree_level(entries, count, sub_prefix, &sub_id) != 0) return -1;
+
+            // Add directory entry
+            TreeEntry *e = &tree.entries[tree.count++];
+            e->mode = MODE_DIR;
+            e->hash = sub_id;
+            strncpy(e->name, dir_name, sizeof(e->name) - 1);
+            e->name[sizeof(e->name) - 1] = '\0';
+
+            // Skip all entries belonging to this subdirectory
+            while (i < count) {
+                const char *r2 = entries[i].path;
+                if (pfx_len > 0) {
+                    if (strncmp(r2, prefix, pfx_len) != 0 || r2[pfx_len] != '/') break;
+                    r2 += pfx_len + 1;
+                }
+                if (strncmp(r2, dir_name, dir_len) == 0 && r2[dir_len] == '/') i++;
+                else break;
+            }
+        }
+    }
+
+    // Serialize and write this tree level
+    void *data;
+    size_t data_len;
+    if (tree_serialize(&tree, &data, &data_len) != 0) return -1;
+    int rc = object_write(OBJ_TREE, data, data_len, id_out);
+    free(data);
+    return rc;
+}
+
 int tree_from_index(ObjectID *id_out) {
-    // TODO: Implement recursive tree building
-    // (See Lab Appendix for logical steps)
-    (void)id_out;
-    return -1;
+    Index index;
+    if (index_load(&index) != 0) return -1;
+    return write_tree_level(index.entries, index.count, "", id_out);
 }
