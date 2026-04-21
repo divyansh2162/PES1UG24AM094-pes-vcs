@@ -142,19 +142,23 @@ int index_load(Index *index) {
     char path[512];
 
     while (index->count < MAX_INDEX_ENTRIES) {
-        int n = fscanf(f, "%o %64s %llu %u %511s\n",
-                       &mode, hex, &mtime, &size, path);
-        if (n == EOF) break;
-        if (n != 5) { fclose(f); return -1; }
+    int n = fscanf(f, "%o %64s %llu %u %511s",
+                   &mode, hex, &mtime, &size, path);
 
-        IndexEntry *e = &index->entries[index->count++];
-        e->mode = mode;
-        if (hex_to_hash(hex, &e->hash) != 0) { fclose(f); return -1; }
-        e->mtime_sec = (uint64_t)mtime;
-        e->size = (uint32_t)size;
-        strncpy(e->path, path, sizeof(e->path) - 1);
-        e->path[sizeof(e->path) - 1] = '\0';
+    if (n == EOF) break;
+
+    if (n != 5) {
+        continue;   // ✅ FIX
     }
+
+    IndexEntry *e = &index->entries[index->count++];
+    e->mode = mode;
+    if (hex_to_hash(hex, &e->hash) != 0) { fclose(f); return -1; }
+    e->mtime_sec = (uint64_t)mtime;
+    e->size = (uint32_t)size;
+    strncpy(e->path, path, sizeof(e->path) - 1);
+    e->path[sizeof(e->path) - 1] = '\0';
+}
 
     fclose(f);
     return 0;
